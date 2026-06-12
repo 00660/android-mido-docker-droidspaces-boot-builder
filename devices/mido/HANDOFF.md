@@ -29,6 +29,7 @@
 - Config fragment: `devices/mido/config/docker-droidspaces-audio.fragment`.
 - Default kernel repo/ref are set to `AlphaDroid-devices/kernel_xiaomi_mido.git` and `alpha-14`.
 - `boot_source_url` can use the SourceForge ROM URL above. Repository variable fallback is `MIDO_BOOT_SOURCE_URL`.
+- Standalone repo workflow `.github/workflows/build-mido.yml` additionally downloads the latest official `topjohnwu/Magisk` release and publishes a Magisk pre-patched boot image named `*-magisk-v*.img`. This is Magisk's supported boot ramdisk patch path, not a system-partition APK injection.
 
 ## Kernel config requirements
 

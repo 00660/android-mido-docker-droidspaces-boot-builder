@@ -2,7 +2,7 @@
 
 Standalone GitHub Actions builder for Xiaomi Redmi Note 4/4X `mido`.
 
-The workflow downloads the matching crDroid mido ROM, extracts `boot.img`, builds the `AlphaDroid-devices/kernel_xiaomi_mido` kernel with Docker / Droidspaces / ALSA loopback options, repacks boot, and publishes only the final files to GitHub Releases.
+The workflow downloads the matching crDroid mido ROM, extracts `boot.img`, builds the `AlphaDroid-devices/kernel_xiaomi_mido` kernel with Docker / Droidspaces / ALSA loopback options, repacks boot, patches a second boot image with the latest official Magisk release, and publishes only the final files to GitHub Releases.
 
 ## Defaults
 
@@ -19,6 +19,14 @@ The workflow downloads the matching crDroid mido ROM, extracts `boot.img`, build
 Run `.github/workflows/build-mido.yml` manually.
 
 The workflow does not upload Actions artifacts. Successful output is published to the stable Release tag above and older assets under that tag are replaced.
+
+Release assets include:
+
+- plain Docker / Droidspaces / virtual-audio `boot.img`
+- Magisk pre-patched `boot.img`
+- final kernel `.config`
+- build manifest
+- official Magisk APK used for the patch
 
 ## Audio requirement
 

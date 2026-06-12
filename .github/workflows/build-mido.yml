@@ -16,6 +16,7 @@ env:
   KERNEL_REF: alpha-14
   RELEASE_TAG: mido-crdroid-15-20260531-docker-droidspaces-audio-boot
   RELEASE_BASE: mido-crDroidAndroid-15.0-20260531-docker-droidspaces-audio-boot
+  MAGISK_API_URL: https://api.github.com/repos/topjohnwu/Magisk/releases/latest
 
 jobs:
   build:
@@ -58,13 +59,75 @@ jobs:
             devices/mido/artifacts/Image.gz-dtb \
             devices/mido/artifacts/boot-docker.img
 
+      - name: Download latest official Magisk
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          with urllib.request.urlopen(os.environ["MAGISK_API_URL"], timeout=60) as response:
+              release = json.load(response)
+          asset = next(
+              item for item in release["assets"]
+              if item["name"].startswith("Magisk-") and item["name"].endswith(".apk")
+          )
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"MAGISK_VERSION={release['tag_name']}\n")
+              env.write(f"MAGISK_APK_NAME={asset['name']}\n")
+              env.write(f"MAGISK_APK_URL={asset['browser_download_url']}\n")
+          PY
+          curl -L --fail --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/$MAGISK_APK_NAME" "$MAGISK_APK_URL"
+          sha256sum "$RUNNER_TEMP/$MAGISK_APK_NAME" > "$RUNNER_TEMP/$MAGISK_APK_NAME.sha256"
+
+      - name: Patch boot with latest official Magisk
+        run: |
+          patch_dir="$RUNNER_TEMP/magisk-patch"
+          mkdir -p "$patch_dir/host" "$patch_dir/target"
+          cp -f devices/mido/artifacts/boot-docker.img "$patch_dir/boot.img"
+          cp -f "$RUNNER_TEMP/$MAGISK_APK_NAME" "$patch_dir/magisk.apk"
+          cd "$patch_dir"
+          unzip -oj magisk.apk 'assets/boot_patch.sh' 'assets/util_functions.sh' 'assets/stub.apk'
+          unzip -oj magisk.apk 'lib/x86_64/libmagiskboot.so' -d host
+          unzip -oj magisk.apk \
+            'lib/arm64-v8a/libmagisk.so' \
+            'lib/arm64-v8a/libmagiskinit.so' \
+            'lib/arm64-v8a/libinit-ld.so' \
+            -d target
+          cp -f host/libmagiskboot.so magiskboot
+          cp -f target/libmagisk.so magisk
+          cp -f target/libmagiskinit.so magiskinit
+          cp -f target/libinit-ld.so init-ld
+          chmod 755 boot_patch.sh magiskboot magisk magiskinit init-ld
+          export BOOTMODE=false
+          export SOURCEDMODE=true
+          export API=35
+          export ABI=arm64-v8a
+          export ABI32=armeabi-v7a
+          export ARCH=arm64
+          export IS64BIT=true
+          export KEEPVERITY=true
+          export KEEPFORCEENCRYPT=true
+          export PATCHVBMETAFLAG=false
+          export RECOVERYMODE=false
+          export LEGACYSAR=false
+          . ./util_functions.sh
+          . ./boot_patch.sh boot.img
+          test -f new-boot.img
+          cp -f new-boot.img "$GITHUB_WORKSPACE/devices/mido/artifacts/boot-docker-magisk.img"
+          sha256sum "$GITHUB_WORKSPACE/devices/mido/artifacts/boot-docker-magisk.img" > "$GITHUB_WORKSPACE/devices/mido/artifacts/boot-docker-magisk.img.sha256"
+
       - name: Write release files
         run: |
           out=devices/mido/release
           mkdir -p "$out"
           cp -f devices/mido/artifacts/boot-docker.img "$out/$RELEASE_BASE.img"
           (cd "$out" && sha256sum "$RELEASE_BASE.img" > "$RELEASE_BASE.img.sha256")
+          cp -f devices/mido/artifacts/boot-docker-magisk.img "$out/$RELEASE_BASE-magisk-$MAGISK_VERSION.img"
+          (cd "$out" && sha256sum "$RELEASE_BASE-magisk-$MAGISK_VERSION.img" > "$RELEASE_BASE-magisk-$MAGISK_VERSION.img.sha256")
           cp -f devices/mido/artifacts/config-docker-final "$out/$RELEASE_BASE.config"
+          cp -f "$RUNNER_TEMP/$MAGISK_APK_NAME" "$out/$MAGISK_APK_NAME"
+          cp -f "$RUNNER_TEMP/$MAGISK_APK_NAME.sha256" "$out/$MAGISK_APK_NAME.sha256"
           {
             echo "device=mido"
             echo "rom=crDroidAndroid-15.0-20260531-mido-v11.16.zip"
@@ -77,11 +140,17 @@ jobs:
             echo "upstream_commit=$(cat devices/mido/artifacts/upstream-commit)"
             echo "kernel_release=$(cat devices/mido/artifacts/kernel-release)"
             echo "boot_sha256=$(cut -d ' ' -f 1 devices/mido/artifacts/boot-docker.img.sha256)"
+            echo "magisk_version=$MAGISK_VERSION"
+            echo "magisk_apk=$MAGISK_APK_NAME"
+            echo "magisk_apk_url=$MAGISK_APK_URL"
+            echo "magisk_boot_sha256=$(cut -d ' ' -f 1 devices/mido/artifacts/boot-docker-magisk.img.sha256)"
           } > "$out/$RELEASE_BASE.manifest.env"
           {
             echo "mido Docker / Droidspaces / ALSA loopback boot image."
             echo
             echo "Kernel includes Docker / Droidspaces container support and CONFIG_SND_ALOOP=y."
+            echo
+            echo "This release contains both the plain boot image and a Magisk pre-patched boot image using official Magisk $MAGISK_VERSION."
             echo
             echo "ROM/vendor still must expose loopback capture through Audio HAL and audio policy as an input profile/device. Kernel-only loopback is not enough for WeChat / AudioRecord."
           } > "$out/RELEASE_NOTES.md"
@@ -96,8 +165,12 @@ jobs:
           gh release create "$RELEASE_TAG" \
             "devices/mido/release/$RELEASE_BASE.img" \
             "devices/mido/release/$RELEASE_BASE.img.sha256" \
+            "devices/mido/release/$RELEASE_BASE-magisk-$MAGISK_VERSION.img" \
+            "devices/mido/release/$RELEASE_BASE-magisk-$MAGISK_VERSION.img.sha256" \
             "devices/mido/release/$RELEASE_BASE.config" \
             "devices/mido/release/$RELEASE_BASE.manifest.env" \
+            "devices/mido/release/$MAGISK_APK_NAME" \
+            "devices/mido/release/$MAGISK_APK_NAME.sha256" \
             --title "$title" \
             --notes-file devices/mido/release/RELEASE_NOTES.md \
             --latest
