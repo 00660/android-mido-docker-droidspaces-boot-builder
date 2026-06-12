@@ -1,0 +1,7 @@
+work/
+devices/*/work/
+devices/*/base/
+devices/*/artifacts/
+*.log
+*.tmp
+*.bak-*

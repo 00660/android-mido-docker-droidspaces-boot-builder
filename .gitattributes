@@ -1,0 +1,9 @@
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.fragment text eol=lf
+*.py text eol=lf
+*.img binary
+*.zip binary
+*.gz binary
