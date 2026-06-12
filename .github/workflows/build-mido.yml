@@ -16,7 +16,7 @@ env:
   KERNEL_REF: alpha-14
   RELEASE_TAG: mido-crdroid-15-20260531-docker-droidspaces-audio-boot
   RELEASE_BASE: mido-crDroidAndroid-15.0-20260531-docker-droidspaces-audio-boot
-  MAGISK_API_URL: https://api.github.com/repos/topjohnwu/Magisk/releases/latest
+  MAGISK_LATEST_URL: https://github.com/topjohnwu/Magisk/releases/latest
 
 jobs:
   build:
@@ -61,21 +61,15 @@ jobs:
 
       - name: Download latest official Magisk
         run: |
-          python3 - <<'PY' > "$RUNNER_TEMP/magisk.env"
-          import json
-          import os
-          import urllib.request
-
-          with urllib.request.urlopen(os.environ["MAGISK_API_URL"], timeout=60) as response:
-              release = json.load(response)
-          asset = next(
-              item for item in release["assets"]
-              if item["name"].startswith("Magisk-") and item["name"].endswith(".apk")
-          )
-          print(f"MAGISK_VERSION={release['tag_name']}")
-          print(f"MAGISK_APK_NAME={asset['name']}")
-          print(f"MAGISK_APK_URL={asset['browser_download_url']}")
-          PY
+          latest_url="$(curl -Ls -o /dev/null -w '%{url_effective}' "$MAGISK_LATEST_URL")"
+          magisk_version="${latest_url##*/}"
+          magisk_apk_name="Magisk-${magisk_version}.apk"
+          magisk_apk_url="https://github.com/topjohnwu/Magisk/releases/download/${magisk_version}/${magisk_apk_name}"
+          {
+            echo "MAGISK_VERSION=$magisk_version"
+            echo "MAGISK_APK_NAME=$magisk_apk_name"
+            echo "MAGISK_APK_URL=$magisk_apk_url"
+          } > "$RUNNER_TEMP/magisk.env"
           cat "$RUNNER_TEMP/magisk.env" >> "$GITHUB_ENV"
           . "$RUNNER_TEMP/magisk.env"
           curl -L --fail --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/$MAGISK_APK_NAME" "$MAGISK_APK_URL"
