@@ -2,9 +2,6 @@ name: Build mido Docker Droidspaces audio boot
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: write

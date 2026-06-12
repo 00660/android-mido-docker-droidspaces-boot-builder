@@ -1,0 +1,180 @@
+name: Repackage mido ROM with Magisk APK preinstall
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: mido-crdroid-15-20260531-docker-droidspaces-audio-boot
+  BASE_ROM_NAME: crDroidAndroid-15.0-20260531-mido-v11.16-docker-droidspaces-audio-magisk-v30.7.zip
+  MAGISK_APK_NAME: Magisk-v30.7.apk
+  APKPREINSTALL_ROM_NAME: crDroidAndroid-15.0-20260531-mido-v11.16-docker-droidspaces-audio-magisk-v30.7-apkpreinstall.zip
+
+jobs:
+  repackage:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Download existing release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p work release
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir work \
+            --pattern "$BASE_ROM_NAME" \
+            --pattern "$MAGISK_APK_NAME"
+          test -s "work/$BASE_ROM_NAME"
+          test -s "work/$MAGISK_APK_NAME"
+          ls -lh work
+
+      - name: Add Magisk APK preinstall payload
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import zipfile
+
+          base_rom = pathlib.Path("work") / os.environ["BASE_ROM_NAME"]
+          magisk_apk = pathlib.Path("work") / os.environ["MAGISK_APK_NAME"]
+          out_dir = pathlib.Path("release")
+          out_dir.mkdir(parents=True, exist_ok=True)
+          out_rom = out_dir / os.environ["APKPREINSTALL_ROM_NAME"]
+
+          updater_name = "META-INF/com/google/android/updater-script"
+          magisk_payload_name = f"magisk/{os.environ['MAGISK_APK_NAME']}"
+          preinstall_script_name = "install/bin/preinstall_magisk_apk.sh"
+
+          preinstall_script = """#!/sbin/sh
+          set -e
+
+          SYSDEV="$1"
+          SYSFS="${2:-ext4}"
+          APK="$3"
+
+          if [ ! -f "$APK" ]; then
+            echo "Magisk APK payload missing: $APK"
+            exit 1
+          fi
+
+          if [ -d /mnt/system ]; then
+            SYSMOUNT=/mnt/system
+          elif [ -d /system_root ]; then
+            SYSMOUNT=/system_root
+          else
+            SYSMOUNT=/system
+          fi
+
+          if grep -q "^$SYSDEV " /proc/mounts; then
+            umount "$(grep "^$SYSDEV " /proc/mounts | head -n1 | cut -d' ' -f2)" || true
+          fi
+
+          mount -t "$SYSFS" "$SYSDEV" "$SYSMOUNT" -o rw,discard || mount -t "$SYSFS" "$SYSDEV" "$SYSMOUNT" -o rw
+
+          if [ -d "$SYSMOUNT/system" ]; then
+            SYSTEM_DIR="$SYSMOUNT/system"
+          else
+            SYSTEM_DIR="$SYSMOUNT"
+          fi
+
+          TARGET_DIR="$SYSTEM_DIR/app/Magisk"
+          mkdir -p "$TARGET_DIR"
+          cp -f "$APK" "$TARGET_DIR/Magisk.apk"
+          chown 0:0 "$TARGET_DIR" "$TARGET_DIR/Magisk.apk" || true
+          chmod 0755 "$TARGET_DIR"
+          chmod 0644 "$TARGET_DIR/Magisk.apk"
+          if command -v chcon >/dev/null 2>&1; then
+            chcon u:object_r:system_file:s0 "$TARGET_DIR" "$TARGET_DIR/Magisk.apk" || true
+          fi
+          sync
+          umount "$SYSMOUNT"
+          echo "Magisk APK preinstalled at /system/app/Magisk/Magisk.apk"
+          """
+          preinstall_script = "\n".join(line[10:] if line.startswith("          ") else line for line in preinstall_script.splitlines()) + "\n"
+
+          insert_after = 'run_program("/tmp/install/bin/backuptool.sh", "restore", "/dev/block/by-name/system", "ext4");'
+          injection = f'''{insert_after}
+          ui_print("Preinstalling Magisk APK into /system/app...");
+          package_extract_file("{magisk_payload_name}", "/tmp/{os.environ['MAGISK_APK_NAME']}");
+          package_extract_file("{preinstall_script_name}", "/tmp/install/bin/preinstall_magisk_apk.sh");
+          set_metadata("/tmp/install/bin/preinstall_magisk_apk.sh", "uid", 0, "gid", 0, "mode", 0755);
+          run_program("/tmp/install/bin/preinstall_magisk_apk.sh", "/dev/block/by-name/system", "ext4", "/tmp/{os.environ['MAGISK_APK_NAME']}") ||
+            abort("E3001: Failed to preinstall Magisk APK.");
+          '''
+
+          def clone_info(info, compress_type=None):
+            zi = zipfile.ZipInfo(info.filename, info.date_time)
+            zi.compress_type = info.compress_type if compress_type is None else compress_type
+            zi.comment = info.comment
+            zi.extra = b""
+            zi.internal_attr = info.internal_attr
+            zi.external_attr = info.external_attr
+            zi.create_system = info.create_system
+            return zi
+
+          def new_info(name, mode, compress_type=zipfile.ZIP_DEFLATED):
+            zi = zipfile.ZipInfo(name)
+            zi.compress_type = compress_type
+            zi.create_system = 3
+            zi.external_attr = mode << 16
+            return zi
+
+          with zipfile.ZipFile(base_rom, "r") as zin, zipfile.ZipFile(out_rom, "w", allowZip64=True) as zout:
+            for info in zin.infolist():
+              if info.filename in {magisk_payload_name, preinstall_script_name}:
+                continue
+              data = zin.read(info.filename)
+              if info.filename == updater_name:
+                text = data.decode("utf-8")
+                if "preinstall_magisk_apk.sh" not in text:
+                  if insert_after not in text:
+                    raise SystemExit("restore hook anchor not found in updater-script")
+                  text = text.replace(insert_after, injection, 1)
+                data = text.encode("utf-8")
+              zout.writestr(clone_info(info), data)
+            zout.writestr(new_info(preinstall_script_name, 0o100755), preinstall_script.encode("utf-8"))
+            zout.writestr(new_info(magisk_payload_name, 0o100644), magisk_apk.read_bytes())
+
+          digest = hashlib.sha256(out_rom.read_bytes()).hexdigest()
+          (out_dir / f"{out_rom.name}.sha256").write_text(f"{digest}  {out_rom.name}\n", encoding="utf-8")
+
+          offsets = []
+          with zipfile.ZipFile(out_rom, "r") as z:
+            for name in ("META-INF/com/android/metadata", "META-INF/com/android/metadata.pb", updater_name, preinstall_script_name, magisk_payload_name):
+              info = z.getinfo(name)
+              offset = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+              offsets.append(f"{name}={offset}:{info.file_size}")
+          (out_dir / "apkpreinstall-rom-offsets.txt").write_text("\n".join(offsets) + "\n", encoding="utf-8")
+
+          notes = f"""mido crDroid 15 Docker / Droidspaces / audio ROM with Magisk APK preinstall.
+
+          This asset is repackaged from the already published integrated ROM; it does not rebuild the kernel.
+          During recovery flashing, after the system block image is written and backuptool restore completes, the installer mounts /dev/block/by-name/system read-write and copies Magisk to /system/app/Magisk/Magisk.apk.
+          Boot root is still provided by the Magisk-patched boot image inside the ROM zip.
+
+          SHA256: {digest}
+          """
+          notes = "\n".join(line[10:] if line.startswith("          ") else line for line in notes.splitlines()) + "\n"
+          (out_dir / "apkpreinstall-notes.txt").write_text(notes, encoding="utf-8")
+
+          print(f"apkpreinstall_rom={out_rom.name}")
+          print(f"apkpreinstall_rom_sha256={digest}")
+          PY
+          ls -lh release
+
+      - name: Upload apk-preinstall release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            "release/$APKPREINSTALL_ROM_NAME" \
+            "release/$APKPREINSTALL_ROM_NAME.sha256" \
+            "release/apkpreinstall-rom-offsets.txt" \
+            "release/apkpreinstall-notes.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
