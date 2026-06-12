@@ -36,6 +36,54 @@ require_config_y() {
   fi
 }
 
+patch_kernelsu_hook_stubs() {
+  if ! grep -Rqs 'ksu_handle_' "$SRC_DIR/fs" "$SRC_DIR/drivers/input"; then
+    return
+  fi
+
+  log "Patch missing KernelSU hook stubs"
+  cat > "$SRC_DIR/kernel/ksu_stub.c" <<'EOF'
+#include <linux/compiler.h>
+#include <linux/fs.h>
+#include <linux/types.h>
+
+struct filename;
+
+int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
+			 int *mode, int *flags)
+{
+	return 0;
+}
+
+int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
+			size_t *count_ptr, loff_t **pos)
+{
+	return 0;
+}
+
+int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
+{
+	return 0;
+}
+
+int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+			void *envp, int *flags)
+{
+	return 0;
+}
+
+int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code,
+				  int *value)
+{
+	return 0;
+}
+EOF
+
+  if ! grep -q 'ksu_stub.o' "$SRC_DIR/kernel/Makefile"; then
+    printf '\nobj-y += ksu_stub.o\n' >> "$SRC_DIR/kernel/Makefile"
+  fi
+}
+
 log "Install build dependencies"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
@@ -55,6 +103,7 @@ else
   git -C "$SRC_DIR" checkout FETCH_HEAD
 fi
 UPSTREAM_COMMIT="$(git -C "$SRC_DIR" rev-parse HEAD)"
+patch_kernelsu_hook_stubs
 
 MAKE_ARGS=(
   -C "$SRC_DIR"

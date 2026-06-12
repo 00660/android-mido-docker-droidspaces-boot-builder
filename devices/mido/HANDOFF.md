@@ -19,6 +19,7 @@
 - Defconfig: `arch/arm64/configs/mido_defconfig`.
 - Current upstream `mido_defconfig` already has `CONFIG_SOUND=y` and `CONFIG_SND=y`.
 - Current upstream `mido_defconfig` does not explicitly enable `CONFIG_SND_ALOOP`.
+- The `alpha-14` kernel tree contains unconditional KernelSU hook calls such as `ksu_handle_faccessat` and `ksu_handle_vfs_read`, but no matching hook implementation was found by GitHub code search. The standalone build script injects `kernel/ksu_stub.c` with no-op hook implementations and appends `obj-y += ksu_stub.o` to `kernel/Makefile`. This is only a link fix for stale hooks; it does not enable KernelSU behavior.
 
 ## GitHub build entry
 
