@@ -61,7 +61,7 @@ jobs:
 
       - name: Download latest official Magisk
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY' > "$RUNNER_TEMP/magisk.env"
           import json
           import os
           import urllib.request
@@ -72,11 +72,12 @@ jobs:
               item for item in release["assets"]
               if item["name"].startswith("Magisk-") and item["name"].endswith(".apk")
           )
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"MAGISK_VERSION={release['tag_name']}\n")
-              env.write(f"MAGISK_APK_NAME={asset['name']}\n")
-              env.write(f"MAGISK_APK_URL={asset['browser_download_url']}\n")
+          print(f"MAGISK_VERSION={release['tag_name']}")
+          print(f"MAGISK_APK_NAME={asset['name']}")
+          print(f"MAGISK_APK_URL={asset['browser_download_url']}")
           PY
+          cat "$RUNNER_TEMP/magisk.env" >> "$GITHUB_ENV"
+          . "$RUNNER_TEMP/magisk.env"
           curl -L --fail --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/$MAGISK_APK_NAME" "$MAGISK_APK_URL"
           sha256sum "$RUNNER_TEMP/$MAGISK_APK_NAME" > "$RUNNER_TEMP/$MAGISK_APK_NAME.sha256"
 
