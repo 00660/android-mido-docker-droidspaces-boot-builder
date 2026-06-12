@@ -39,6 +39,7 @@ jobs:
           curl -L --fail --retry 5 --retry-delay 5 -o "$tmp_source" "$BOOT_SOURCE_URL"
           printf '%s  %s\n' "$BOOT_SOURCE_SHA256" "$tmp_source" | sha256sum -c -
           if unzip -l "$tmp_source" boot.img >/dev/null 2>&1; then
+            cp -f "$tmp_source" devices/mido/base/original-rom.zip
             unzip -p "$tmp_source" boot.img > devices/mido/base/boot-current.img
           else
             cp -f "$tmp_source" devices/mido/base/boot-current.img
@@ -124,6 +125,48 @@ jobs:
           cp -f devices/mido/artifacts/config-docker-final "$out/$RELEASE_BASE.config"
           cp -f "$RUNNER_TEMP/$MAGISK_APK_NAME" "$out/$MAGISK_APK_NAME"
           cp -f "$RUNNER_TEMP/$MAGISK_APK_NAME.sha256" "$out/$MAGISK_APK_NAME.sha256"
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import zipfile
+
+          root = pathlib.Path.cwd()
+          src = root / "devices/mido/base/original-rom.zip"
+          boot = root / "devices/mido/artifacts/boot-docker-magisk.img"
+          out = root / "devices/mido/release"
+          magisk_version = os.environ["MAGISK_VERSION"]
+          rom_name = f"crDroidAndroid-15.0-20260531-mido-v11.16-docker-droidspaces-audio-magisk-{magisk_version}.zip"
+          dst = out / rom_name
+          if not src.exists():
+              raise SystemExit("original ROM zip is required to build the integrated flashable ROM")
+          boot_bytes = boot.read_bytes()
+          stored_entries = {"META-INF/com/android/metadata", "META-INF/com/android/metadata.pb"}
+          with zipfile.ZipFile(src, "r") as zin, zipfile.ZipFile(dst, "w", allowZip64=True) as zout:
+              for info in zin.infolist():
+                  data = boot_bytes if info.filename == "boot.img" else zin.read(info.filename)
+                  zi = zipfile.ZipInfo(info.filename, info.date_time)
+                  zi.compress_type = zipfile.ZIP_STORED if info.filename in stored_entries else info.compress_type
+                  zi.comment = info.comment
+                  zi.extra = b""
+                  zi.internal_attr = info.internal_attr
+                  zi.external_attr = info.external_attr
+                  zi.create_system = info.create_system
+                  zout.writestr(zi, data)
+          digest = hashlib.sha256(dst.read_bytes()).hexdigest()
+          (out / f"{rom_name}.sha256").write_text(f"{digest}  {rom_name}\n", encoding="utf-8")
+          offsets = []
+          with zipfile.ZipFile(dst, "r") as z:
+              for name in ("META-INF/com/android/metadata", "META-INF/com/android/metadata.pb", "boot.img"):
+                  info = z.getinfo(name)
+                  offset = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+                  offsets.append(f"{name}={offset}:{info.file_size}")
+          (out / "integrated-rom-offsets.txt").write_text("\n".join(offsets) + "\n", encoding="utf-8")
+          print(f"integrated_rom={rom_name}")
+          print(f"integrated_rom_sha256={digest}")
+          PY
+          integrated_rom="crDroidAndroid-15.0-20260531-mido-v11.16-docker-droidspaces-audio-magisk-$MAGISK_VERSION.zip"
+          integrated_rom_sha256="$(cut -d ' ' -f 1 "$out/$integrated_rom.sha256")"
           {
             echo "device=mido"
             echo "rom=crDroidAndroid-15.0-20260531-mido-v11.16.zip"
@@ -140,13 +183,15 @@ jobs:
             echo "magisk_apk=$MAGISK_APK_NAME"
             echo "magisk_apk_url=$MAGISK_APK_URL"
             echo "magisk_boot_sha256=$(cut -d ' ' -f 1 devices/mido/artifacts/boot-docker-magisk.img.sha256)"
+            echo "integrated_rom=$integrated_rom"
+            echo "integrated_rom_sha256=$integrated_rom_sha256"
           } > "$out/$RELEASE_BASE.manifest.env"
           {
             echo "mido Docker / Droidspaces / ALSA loopback boot image."
             echo
             echo "Kernel includes Docker / Droidspaces container support and CONFIG_SND_ALOOP=y."
             echo
-            echo "This release contains both the plain boot image and a Magisk pre-patched boot image using official Magisk $MAGISK_VERSION."
+            echo "This release contains an integrated flashable ROM zip, the plain boot image, and a Magisk pre-patched boot image using official Magisk $MAGISK_VERSION."
             echo
             echo "ROM/vendor still must expose loopback capture through Audio HAL and audio policy as an input profile/device. Kernel-only loopback is not enough for WeChat / AudioRecord."
           } > "$out/RELEASE_NOTES.md"
@@ -165,6 +210,9 @@ jobs:
             "devices/mido/release/$RELEASE_BASE-magisk-$MAGISK_VERSION.img.sha256" \
             "devices/mido/release/$RELEASE_BASE.config" \
             "devices/mido/release/$RELEASE_BASE.manifest.env" \
+            "devices/mido/release/crDroidAndroid-15.0-20260531-mido-v11.16-docker-droidspaces-audio-magisk-$MAGISK_VERSION.zip" \
+            "devices/mido/release/crDroidAndroid-15.0-20260531-mido-v11.16-docker-droidspaces-audio-magisk-$MAGISK_VERSION.zip.sha256" \
+            "devices/mido/release/integrated-rom-offsets.txt" \
             "devices/mido/release/$MAGISK_APK_NAME" \
             "devices/mido/release/$MAGISK_APK_NAME.sha256" \
             --title "$title" \
