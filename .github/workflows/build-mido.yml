@@ -38,7 +38,7 @@ jobs:
           tmp_source="$(mktemp)"
           curl -L --fail --retry 5 --retry-delay 5 -o "$tmp_source" "$BOOT_SOURCE_URL"
           printf '%s  %s\n' "$BOOT_SOURCE_SHA256" "$tmp_source" | sha256sum -c -
-          if file "$tmp_source" | grep -qi 'zip archive'; then
+          if unzip -l "$tmp_source" boot.img >/dev/null 2>&1; then
             unzip -p "$tmp_source" boot.img > devices/mido/base/boot-current.img
           else
             cp -f "$tmp_source" devices/mido/base/boot-current.img
